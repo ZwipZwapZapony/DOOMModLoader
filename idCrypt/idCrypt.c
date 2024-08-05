@@ -215,7 +215,7 @@ int main(int argc, char *argv[])
 	memcpy(fileIV, fileIV_backup, 0x10); // BCryptEncrypt overwrites the IV, so restore it from backup
 
 	free(fileData);
-	
+
 	res = 0;
 	if (res = fopen_s(&file, destPath, "wb+") != 0)
 	{
@@ -245,6 +245,6 @@ int main(int argc, char *argv[])
 	//free(cryptedText);
 	// ^ causes an error, wtf?
 
-	printf("%s succeeded! Wrote to %s\n", decrypt ? "Decryption" : "Encryption", destPath);	
+	printf("%s succeeded! Wrote to %s\n", decrypt ? "Decryption" : "Encryption", destPath);
 	return 0;
 }
