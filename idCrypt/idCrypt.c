@@ -1,15 +1,19 @@
-// idCrypt v1.0 by emoose
+/**Changelog since #2016-faq version:
+\- Instead of encrypting by default and decrypting *\*.bfile* files, it now decrypts by default and encrypts *\*.dec* files
+\- This can now also be overridden with `-decrypt` and `-encrypt`
+*/
+// idCrypt originally by emoose, updated by Zwip-Zwap Zapony
 // Code licensed under GPL 3.0.
 
-#include "stdafx.h"
+#include <windows.h>
 
-#include <Windows.h>
-
+#include <stdbool.h>
 #include <stdio.h>
 #include <bcrypt.h>
 #include <ncrypt.h>
 
-#define NT_SUCCESS(Status)          (((NTSTATUS)(Status)) >= 0)
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#define strlcpy(dest,src,size) do {strncpy((dest),(src),(size)-1); (dest)[(size)-1]='\0';} while (false) // Note: This doesn't return a value
 
 // static string used during key derivation
 const char* keyDeriveStatic = "swapTeam\n";
@@ -95,43 +99,110 @@ NTSTATUS crypt_data(bool decrypt, void* pbInput, int cbInput, void* pbEncKey, in
 	return res;
 }
 
+void PrintUsage(void)
+{
+	printf(
+		"Usage:\n"
+#ifdef _WIN32 // Windows
+		"    idCrypt.exe [-decrypt | -encrypt] <file-path> <internal-file-path>\n"
+#else // Linux
+		"    ./idCrypt [-decrypt | -encrypt] <file-path> <internal-file-path>\n"
+#endif
+		"\n"
+		"Example:\n"
+#ifdef _WIN32 // Windows
+		"    idCrypt.exe \"D:\\english.bfile\" \"strings/english.lang\"\n"
+#else // Linux
+		"    ./idCrypt \"./english.bfile\" \"strings/english.lang\"\n"
+#endif
+		"\n"
+		"If a .dec file is supplied, it'll be encrypted to <file-path>.bfile\n"
+		"Otherwise the file will be decrypted to <file-path>.dec\n"
+		"This can be overriden with the -decrypt or -encrypt options\n"
+		"\n"
+		"You _must_ use the correct internal filepath for decryption to succeed!\n"
+	);
+}
+
 int main(int argc, char *argv[])
 {
-	printf("idCrypt v1.0 - by emoose\n\n");
+	printf("idCrypt originally by emoose, v0.2+ by Zwip-Zwap Zapony - https://github.com/ZwipZwapZapony/DOOMModLoader\n\n");
 
-	if (argc < 3)
+	signed char decrypt = -1;
+	char* filePath = NULL;
+	char* internalPath = NULL;
+
+	for (int i = 1; i < argc; i++)
 	{
-		printf("Usage:\n\tidCrypt.exe <file-path> <internal-file-path>\n\n");
-		printf("Example:\n\tidCrypt.exe D:\\english.bfile strings/english.lang\n\n");
-		printf("If a .bfile is supplied it'll be decrypted to <file-path>.dec\n");
-		printf("Otherwise the file will be encrypted to <file-path>.bfile\n\n");
-		printf("You _must_ use the correct internal filepath for decryption to succeed!\n");
+		if (argv[i][0] == '-' || argv[i][0] == '/') // Check for command-line options
+		{
+			char option[16]; // Must be longer than the longest option's name plus null byte
+			if (argv[i][0] == '-' && argv[i][1] == '-')
+				strlcpy(option, argv[i] + 2, sizeof option); // Skip the "--" prefix
+			else
+				strlcpy(option, argv[i] + 1, sizeof option); // Skip the "-" or "/" prefix
+			for (int c = 0; option[c]; c++) // Make it lowercase, for case-insensitivity
+				option[c] = tolower(option[c]);
+
+			if (!strcmp(option, "decrypt"))
+			{
+				decrypt = 1;
+				continue;
+			}
+			else if (!strcmp(option, "encrypt"))
+			{
+				decrypt = 0;
+				continue;
+			}
+			else if (!strcmp(option, "help"))
+			{
+				PrintUsage();
+				return 0;
+			}
+		}
+
+		// If it wasn't recognised above, it should be the file-path or internal-path
+		if (filePath == NULL)
+			filePath = argv[i];
+		else if (internalPath == NULL)
+			internalPath = argv[i];
+		else // Too many paths/unrecognised options?
+		{
+			PrintUsage();
+			return 1;
+		}
+	}
+
+	if (filePath == NULL || internalPath == NULL) // Didn't specify both paths
+	{
+		PrintUsage();
 		return 1;
 	}
-	bool decrypt = false;
 
-	char* filePath = argv[1];
-	char* internalPath = argv[2];
-	char* dot = strrchr(filePath, '.');
-
-	// copy extension and make it lowercase, if it's a .bfile we'll switch to decryption mode
-	if (dot)
+	if (decrypt == -1) // "-decrypt" and "-encrypt" were not specified, so auto-detect it
 	{
-		char lowerExt[256];
-		strcpy_s(lowerExt, 256, dot);
+		decrypt = 1; // Default to decryption mode
 
-		for (int i = 0; lowerExt[i]; i++)
-			lowerExt[i] = tolower(lowerExt[i]);
+		// If the file extension is ".dec" (case-insensitive), switch to encryption mode
+		char* dot = strrchr(filePath, '.');
+		if (dot)
+		{
+			char lowerExt[sizeof("dec") + 1]; // One byte more than "dec\0"
+			strlcpy(lowerExt, dot + 1, sizeof lowerExt);
+			for (int i = 0; lowerExt[i]; i++)
+				lowerExt[i] = tolower(lowerExt[i]);
 
-		decrypt = !strcmp(lowerExt, ".bfile") || !strcmp(lowerExt, ".bfile;binaryfile");
+			if (!strcmp(lowerExt, "dec"))
+				decrypt = 0;
+		}
 	}
 
 	char destPath[256];
 	sprintf_s(destPath, 256, "%s.%s", filePath, decrypt ? "dec" : "bfile");
 
 	FILE* file;
-	int res = 0;
-	if (res = fopen_s(&file, filePath, "rb") != 0)
+	int res = fopen_s(&file, filePath, "rb");
+	if (res != 0)
 	{
 		printf("Failed to open %s for reading (error %d)\n", filePath, res);
 		return 2;
@@ -216,8 +287,8 @@ int main(int argc, char *argv[])
 
 	free(fileData);
 
-	res = 0;
-	if (res = fopen_s(&file, destPath, "wb+") != 0)
+	res = fopen_s(&file, destPath, "wb+");
+	if (res != 0)
 	{
 		printf("Failed to open %s for writing (error %d)\n", destPath, res);
 		return 6;
