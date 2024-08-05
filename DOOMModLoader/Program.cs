@@ -1,298 +1,217 @@
-﻿using System;
-using System.Collections.Generic;
-using System.IO;
+﻿using DOOMExtract;
+using System;
+using System.ComponentModel;
 using System.Diagnostics;
-using DOOMExtract;
-using ICSharpCode.SharpZipLib.Core;
-using ICSharpCode.SharpZipLib.Zip;
+using System.IO;
+using System.Threading;
 
-namespace DOOMModLoader
+namespace DOOMModLoader;
+partial class Program
 {
-	class Program
+	enum SteamAppId // DOOM (2016) doesn't allow you to open the game executable directly,
+	{ // so we need the app ID in order to launch the game through Steam instead
+		DOOM_2016 = 379720,
+		DOOM_VFR  = 650000,
+	}
+
+
+
+	static void PrintUsage()
 	{
-		static void PrintUsage()
+		string executable = "./DOOMModLoader";
+		if (OperatingSystem.IsWindows())
+			executable = "DOOMModLoader.exe";
+
+		Console.WriteLine("Usage: " + executable + " [-[no]launchgame] [-moddir <pathToModsFolder>] [-[no]patchgame] [-[no]showconflicts] [-[no]snapmap]");
+		Console.WriteLine();
+		Console.WriteLine("    -help              - Display this text");
+		Console.WriteLine("    -[no]launchgame    - [Don't] Launch the game after installing mods");
+		Console.WriteLine("    -moddir <path>     - Use mods from a given path instead of \"Mods\"");
+		Console.WriteLine("    -[no]patchgame     - [Don't] Patch the game to not require developer mode, if possible");
+		Console.WriteLine("    -[no]showconflicts - [Don't] Show mod file conflicts");
+		Console.WriteLine("    -[no]snapmap       - [Don't] Install mods for SnapMap instead of Campaign/Multiplayer");
+		Console.WriteLine();
+		Console.WriteLine("All options besides \"-moddir\" can also be set in \"DOOMModLoader Settings.txt\"");
+	}
+
+	static int Main(string[] args)
+	{
+		Console.WriteLine("DOOMModLoader originally by infogram, v0.2+ by Zwip-Zwap Zapony and PowerBall253");
+		Console.WriteLine("https://github.com/ZwipZwapZapony/DOOMModLoader");
+		Console.WriteLine();
+
+		LoadConfig();
+		bool launchGame    = configLaunchGame;
+		bool patchGame     = configPatchGame;
+		bool showConflicts = configShowConflicts;
+		bool snapMap       = configSnapMap;
+		string modDir = "Mods";
+
+		for (int i = 0; i < args.Length; i++) // Parse command-line arguments
 		{
-			Console.WriteLine("Usage: DOOMModLoader.exe [-mp/-snap] [-vulkan] [-moddir <pathToModsFolder>]");
-			Console.WriteLine();
-			Console.WriteLine("  -mp\t\t\tLoad MP gamemode");
-			Console.WriteLine("  -snap\t\t\tLoad SnapMap gamemode");
-			Console.WriteLine("  -vulkan\t\tLoad DOOMx64vk instead of DOOMx64");
-			Console.WriteLine("  -moddir <path>\tUse mods from given path");
-			Console.WriteLine("  -help\t\t\tDisplay this text");
+			string arg = args[i].Replace("--", "-").Replace('/', '-'); // Support "-", "--", and "/" prefixes
+			switch (arg.ToLowerInvariant()) // Case-insensitive
+			{
+				case "-?":
+				case "-h":
+				case "-help":
+					PrintUsage();
+					return 0;
+				case "-launchgame":
+				case "-nolaunchgame":
+					launchGame = (arg[1] != 'n');
+					if (askToLaunchGame)
+					{
+						askToLaunchGame = false; // If "-(no)launchGame" was specified on the command-line, don't ask whether to launch it
+						shouldSaveConfig = false; // Likewise, don't save a settings file that skips that question if the user has never been asked
+					}
+					break;
+				case "-moddir":
+					if ((i + 1) < args.Length)
+						modDir = args[++i];
+					break;
+				case "-patchgame":
+				case "-nopatchgame":
+					patchGame = (arg[1] != 'n');
+					break;
+				case "-showconflicts":
+				case "-noshowconflicts":
+					showConflicts = (arg[1] != 'n');
+					break;
+				case "-snap":
+				case "-snapmap":
+				case "-nosnap":
+				case "-nosnapmap":
+					snapMap = (arg[1] != 'n');
+					break;
+				default:
+					Console.WriteLine("Unknown option \"" + arg + "\"!");
+					return 1;
+			}
 		}
 
-		static void Main(string[] args)
+		SteamAppId appId;
+		if (File.Exists("./DOOMx64.exe"))
 		{
-			string gameMode = "1";
-			string resourcePrefix = "";
-			string modDir = "mods";
-			string exeName = "DOOMx64.exe";
-
-			Console.WriteLine("DOOMModLoader 0.2 by infogram - https://github.com/emoose/DOOMExtract");
-			Console.WriteLine();
-
-			for (int i = 0; i < args.Length; i++)
+			appId = SteamAppId.DOOM_2016;
+			if (!File.Exists("./base/" + (snapMap ? "snap_" : "") + "gameresources.pindex"))
 			{
-				var arg = args[i];
-				switch (arg)
-				{
-					case "-mp":
-					case "/mp":
-						gameMode = "2";
-						resourcePrefix = "mp_";
-						break;
-					case "-snap":
-					case "/snap":
-						gameMode = "3";
-						resourcePrefix = "snap_";
-						break;
-					case "-moddir":
-					case "/moddir":
-						if ((i + 1) < args.Length)
-							modDir = args[i + 1];
-						break;
-					case "-vulkan":
-					case "/vulkan":
-						exeName = "DOOMx64vk.exe";
-						break;
-					case "-help":
-					case "/help":
-						PrintUsage();
-						return;
-				}
+				FatalError("Failed to find \"" + (snapMap ? "snap_" : "") + "gameresources.pindex\" in the base folder!");
+				return 1;
 			}
-
-			if (!File.Exists(exeName))
+		}
+		else if (File.Exists("./DOOMVFRx64.exe"))
+		{
+			appId = SteamAppId.DOOM_VFR;
+			snapMap = false;
+			if (!File.Exists("./base/gameresources.index")) // DOOM VFR doesn't have a patch container
 			{
-				Console.WriteLine($"Error: failed to find {exeName} in current directory!");
-				PressKeyPrompt();
-				return;
+				FatalError("Failed to find \"gameresources.index\" in the base folder!");
+				return 1;
 			}
+		}
+		else
+		{
+			FatalError("Failed to find \"DOOMx64.exe\" in the current directory!");
+			return 1;
+		}
 
-			if (!Directory.Exists(modDir))
+		if (!Directory.Exists(modDir))
+		{
+			if (Directory.Exists(modDir.ToLowerInvariant())) // The default changed from "mods" to "Mods", and Linux is case-sensitive, so check for an old "mods" folder
+				modDir = modDir.ToLowerInvariant();
+			else
 				Directory.CreateDirectory(modDir);
+		}
 
-			bool hasMods = false;
+		UninstallMods(snapMap); // Delete previously-installed mods
+		bool hasMods = InstallMods(modDir, snapMap, showConflicts); // Install new mods
 
-			// create folder to extract mods into
-			var extractedPath = Path.GetTempFileName();
-			File.Delete(extractedPath);
-			Directory.CreateDirectory(extractedPath);
-
-			// copy loose mods from modDir into extract path
-			Console.WriteLine("Extracting/copying mods into " + extractedPath);
-
-			var modFiles = Directory.GetFiles(modDir);
-			var modDirs = Directory.GetDirectories(modDir);
-
-			var zips = new List<string>();
-			foreach(var file in modFiles)
+		GameExeStatus exeStatus = CheckGameExecutables();
+		if (exeStatus == GameExeStatus.Vanilla_New && patchGame)
+		{
+			if (PatchGameExecutables())
+				exeStatus = GameExeStatus.Patched_New;
+			else
 			{
-				hasMods = true;
-
-				if (Path.GetExtension(file).ToLower() == ".zip")
-					zips.Add(file); // don't copy zips, we'll extract them later instead
-				else
-				{
-					File.Copy(file, Path.Combine(extractedPath, Path.GetFileName(file)));
-				}
+				Utility.WriteWarning("Failed to patch the game executables", true);
+				Console.WriteLine("Developer mode may be necessary to launch the game with mods installed");
+				Console.ResetColor();
+				if (!askToLaunchGame)
+					Console.WriteLine();
 			}
-			foreach (var dir in modDirs)
+		}
+
+		if (askToLaunchGame)
+		{
+			Console.WriteLine();
+			Console.WriteLine("Mods were successfully " + (hasMods ? "" : "un") + "installed");
+			Console.WriteLine("Do you want to launch the game? You can change this later by editing \"DOOMModLoader Settings.txt\"");
+			Console.WriteLine("Press [Y] to launch the game, or [N] to exit...");
+
+			configLaunchGame = YesNoPrompt();
+			launchGame = configLaunchGame;
+
+			if (!launchGame) // Exit immediately if the user pressed N
 			{
-				hasMods = true;
-				CloneDirectory(dir, Path.Combine(extractedPath, Path.GetFileName(dir)));
+				SaveConfig();
+				return 0;
 			}
-
-			// extract mod zips
-			var modInfoPath = Path.Combine(extractedPath, "modinfo.txt");
-			var fileIdsPath = Path.Combine(extractedPath, "fileIds.txt");
-			var fileIds = "";
-			if (File.Exists(fileIdsPath))
-			{
-				fileIds = File.ReadAllText(fileIdsPath);
-				File.Delete(fileIdsPath);
-			}
-
-			foreach (var zipfile in zips)
-			{
-				var modInfo = Path.GetFileName(zipfile);
-				Console.WriteLine("Extracting " + modInfo);
-				ExtractZipFile(zipfile, "", extractedPath);
-				if (File.Exists(modInfoPath))
-				{
-					modInfo = File.ReadAllText(modInfoPath);
-					if (String.IsNullOrEmpty(modInfo))
-						modInfo = Path.GetFileName(zipfile);
-
-					File.Delete(modInfoPath); // delete so no conflicts
-				}
-				if (File.Exists(fileIdsPath))
-				{
-					// todo: make this use a dictionary instead, so we can detect conflicts
-					var modsFileIds = File.ReadAllText(fileIdsPath);
-					if (!String.IsNullOrEmpty(fileIds))
-						fileIds += Environment.NewLine;
-					fileIds += modsFileIds;
-
-					File.Delete(fileIdsPath);
-				}
-
-				Console.WriteLine("Extracted " + modInfo);
-			}
-			if (!String.IsNullOrEmpty(fileIds))
-				File.WriteAllText(fileIdsPath, fileIds);
-
-			// mod patch creation
-			var patchFilter = $"{resourcePrefix}gameresources_*.pindex";
-			var patches = Directory.GetFiles("base", patchFilter);
-			var latestPatch = String.Empty;
-			var latestPfi = 0;
-			foreach (var patch in patches)
-			{
-				if (File.Exists(patch + ".custom"))
-					continue; // patch is one made by us
-
-				var namesp = Path.GetFileNameWithoutExtension(patch).Split('_');
-				var pnum = int.Parse(namesp[namesp.Length - 1]);
-				if (pnum > latestPfi)
-				{
-					latestPatch = patch;
-					latestPfi = pnum;
-				}
-			}
-			if (string.IsNullOrEmpty(latestPatch))
-			{
-				Console.WriteLine("Failed to find latest patch file in base folder!");
-				Console.WriteLine($"Search filter: {patchFilter}");
-				PressKeyPrompt();
-				return;
-			}
-
-			var customPfi = latestPfi + 1;
-
-			// have to find where to copy the index, easiest way is to make a DOOMResourceIndex instance (but not load it)
-			var index = new DOOMResourceIndex(latestPatch);
-			var resPath = index.ResourceFilePath(customPfi);
-			var destPath = Path.ChangeExtension(resPath, ".pindex");
-
-			// delete existing custom patch
-			if (File.Exists(destPath))
-				File.Delete(destPath);
-
-			if (File.Exists(resPath))
-				File.Delete(resPath);
-
-			// if we have mods, create a custom patch out of them
+		}
+		else
+		{
 			if (hasMods)
-			{
-				File.Copy(latestPatch, destPath);
-
-				Console.WriteLine($"Creating custom patch... (patch base: {Path.GetFileName(latestPatch)})");
-
-				index = new DOOMResourceIndex(destPath);
-				if (!index.Load())
-				{
-					Console.WriteLine("Failed to load custom patch " + destPath);
-					PressKeyPrompt();
-					return;
-				}
-				index.PatchFileNumber = (byte)customPfi;
-
-				index.Rebuild(index.ResourceFilePath(customPfi), extractedPath, true);
-				index.Close();
-
-				File.WriteAllText(destPath + ".custom", "DOOMModLoader token file, this tells ModLoader that this is a custom patch file, please don't remove!");
-
-				Console.WriteLine($"Custom patch {Path.GetFileName(destPath)} created.");
-			}
-
-			// cleanup
-			Directory.Delete(extractedPath, true);
-
-			Console.WriteLine("Launching game!");
-
-			var proc = new Process();
-			proc.StartInfo.FileName = exeName;
-			proc.StartInfo.Arguments = $"+com_gameMode {gameMode} +com_restarted 1 +devMode_enable 1";
-			proc.Start();
+				Console.WriteLine("Mods were successfully installed!");
+			else
+				Console.WriteLine("No mods found. Mods were successfully uninstalled!");
 		}
 
-		static void PressKeyPrompt()
-		{
-			Console.WriteLine("Press any key to exit...");
-			Console.ReadKey();
-		}
+		SaveConfig(); // Yes, this belongs outside (but still after!) the "if (askToLaunchGame)" block
 
-		static void CloneDirectory(string src, string dest)
+		if (launchGame)
 		{
-			if (!Directory.Exists(dest))
-				Directory.CreateDirectory(dest);
+			string doomLauncherFile = "." + Path.DirectorySeparatorChar + "DOOMLauncher.exe"; // A forward slash doesn't work here
 
-			foreach (var directory in Directory.GetDirectories(src))
+			Console.WriteLine("Launching game...");
+
+			ProcessStartInfo startInfo = new();
+			startInfo.UseShellExecute = true; // Don't wait for the process to end, and make it more likely for "steam://" URLs to work
+
+			if ((exeStatus is GameExeStatus.Vanilla_Old or GameExeStatus.Vanilla_New)
+			&& OperatingSystem.IsWindows() && File.Exists(doomLauncherFile))
 			{
-				string dirName = Path.GetFileName(directory);
-				if (!Directory.Exists(Path.Combine(dest, dirName)))
-				{
-					Directory.CreateDirectory(Path.Combine(dest, dirName));
-				}
-				CloneDirectory(directory, Path.Combine(dest, dirName));
+				// If the game executables weren't patched, use DOOMLauncher if it exists
+				startInfo.FileName = doomLauncherFile;
+				startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+				if (snapMap)
+					startInfo.Arguments = "+com_gameType 1";
 			}
+			else
+				startInfo.FileName = "steam://run/" + (int)appId + (snapMap ? "//+com_gameType 1" : "");
 
-			foreach (var file in Directory.GetFiles(src))
-			{
-				File.Copy(file, Path.Combine(dest, Path.GetFileName(file)));
-			}
-		}
-
-		static void ExtractZipFile(string archiveFilenameIn, string password, string outFolder)
-		{
-			ZipFile zf = null;
 			try
 			{
-				FileStream fs = File.OpenRead(archiveFilenameIn);
-				zf = new ZipFile(fs);
-				if (!string.IsNullOrEmpty(password))
-					zf.Password = password;     // AES encrypted entries are handled automatically
-
-				foreach (ZipEntry zipEntry in zf)
-				{
-					if (!zipEntry.IsFile)
-						continue;           // Ignore directories
-
-					// to remove the folder from the entry:- entryFileName = Path.GetFileName(entryFileName);
-					// Optionally match entrynames against a selection list here to skip as desired.
-					// The unpacked length is available in the zipEntry.Size property.
-
-					byte[] buffer = new byte[4096];     // 4K is optimum
-					Stream zipStream = zf.GetInputStream(zipEntry);
-
-					// Manipulate the output filename here as desired.
-					string fullZipToPath = Path.Combine(outFolder, zipEntry.Name);
-					string directoryName = Path.GetDirectoryName(fullZipToPath);
-					if (directoryName.Length > 0)
-						Directory.CreateDirectory(directoryName);
-
-					if (File.Exists(fullZipToPath))
-						File.Delete(fullZipToPath); // TODO: warn user about mod conflict!
-
-					// Unzip file in buffered chunks. This is just as fast as unpacking to a buffer the full size
-					// of the file, but does not waste memory.
-					// The "using" will close the stream even if an exception occurs.
-
-					using (FileStream streamWriter = File.Create(fullZipToPath))
-					{
-						StreamUtils.Copy(zipStream, streamWriter, buffer);
-					}
-				}
+				Process.Start(startInfo);
+				Console.WriteLine("Launched game!");
 			}
-			finally
+			catch (Exception e) when (e is Win32Exception) // "Win32Exception" is cross-platform, used when the file doesn't exist
 			{
-				if (zf != null)
-				{
-					zf.IsStreamOwner = true; // Makes close also shut the underlying stream
-					zf.Close(); // Ensure we release resources
-				}
+				Console.WriteLine("Failed to launch the game, but mods were successfully " + (hasMods ? "" : "un") + "installed");
+				PressKeyPrompt();
+				return 0; // Mods were installed, so it's okay to exit with 0
 			}
 		}
+
+		if (!skipPrompts)
+		{
+			Console.CancelKeyPress += ExitCtrlCHandler;
+			Console.WriteLine();
+			Console.WriteLine("Exiting in 10 seconds... (Press [Ctrl+C] to keep this window open...)");
+			Thread.Sleep(10000);
+
+			if (ctrlCHandlerUsed) // Apparently using Ctrl+C during a sleep will return to the post-sleep code when the sleep expires
+				Thread.Sleep(Timeout.Infinite); // In that case, sleep again, forever, and let the Ctrl+C handler end the process instead
+		}
+		return 0;
 	}
 }

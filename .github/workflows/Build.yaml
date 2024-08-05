@@ -1,0 +1,170 @@
+name: Build
+on: push
+env:
+  DOTNET_SYSTEM_CONSOLE_ALLOW_ANSI_COLOR_REDIRECTION: 1
+  TERM: xterm #Needed for dotnet to output ANSI SGR colour codes
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      #Setup
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with: {dotnet-version: 8.0}
+      - name: Set up Alpine
+        uses: jirutka/setup-alpine@v1
+        with: {packages: build-base clang dotnet8-sdk zlib-dev zlib-static}
+      - name: Set up tools/Display tool info
+        run: |
+          echo "::group::sudo apt-get install mingw-w64"
+          echo -e "\e[36;1m>sudo apt-get update\e[0m"
+          sudo apt-get update
+          echo
+          echo -e "\e[36;1m>sudo apt-get install mingw-w64\e[0m"
+          sudo apt-get install mingw-w64
+          echo "::endgroup::"
+
+          echo "::group::dotnet --info"
+          dotnet --info
+          echo "::endgroup::"
+
+          echo "::group::x86_64-w64-mingw32-gcc --version"
+          x86_64-w64-mingw32-gcc --version
+          echo "::endgroup::"
+
+      #Build
+      - name: Build tools
+        run: |
+          echo "::group::Windows - idCrypt"
+          mkdir "./Build/Windows/" --parents
+          x86_64-w64-mingw32-gcc "./idCrypt/idCrypt.c" -o "./Build/Windows/idCrypt.exe" -fdiagnostics-color=always -lbcrypt -Os -s -Wall -Wextra
+          echo "Compiled successfully"
+          echo "::endgroup::"
+
+#         echo "::group::Linux - DOOMExtract (Runtime-dependent)"
+#         dotnet publish "./DOOMExtract/DOOMExtract.csproj" --no-self-contained --output "./Build/Linux/" --runtime linux-x64
+#         echo "::endgroup::"
+
+#         echo "::group::Linux - DOOMModLoader (Runtime-dependent)"
+#         dotnet publish "./DOOMModLoader/DOOMModLoader.csproj" --no-self-contained --output "./Build/Linux/" --runtime linux-x64
+#         echo "::endgroup::"
+
+#         echo "::group::Linux - idCrypt"
+#         gcc "./idCrypt/idCrypt.c" -o "./Build/Linux/idCrypt" -fdiagnostics-color=always -Os -s -Wall -Wextra
+#         echo "Compiled successfully"
+#         echo "::endgroup::"
+
+#         echo "::group::Windows - DOOMModLoader (Runtime-dependent)"
+#         dotnet publish "./DOOMModLoader/DOOMModLoader.csproj" --no-self-contained --output "./Build/Windows/" --runtime win-x64
+#         echo "::endgroup::"
+
+#         echo "::group::Windows - DOOMExtract (Runtime-dependent)"
+#         dotnet publish "./DOOMExtract/DOOMExtract.csproj" --no-self-contained --output "./Build/Windows/" --runtime win-x64
+#         echo "::endgroup::"
+      - name: Build native .NET tools
+        shell: alpine.sh {0}
+        run: |
+          echo "::group::Linux - DOOMExtract (Native, Static)"
+          dotnet publish "./DOOMExtract/DOOMExtract.csproj" --output "./Build/Linux/" "--property:CustomConditionBuildType=AOTStatic" --runtime linux-musl-x64 --self-contained
+          echo "::endgroup::"
+
+          echo "::group::Linux - DOOMModLoader (Native, Static)"
+          dotnet publish "./DOOMModLoader/DOOMModLoader.csproj" --output "./Build/Linux/" "--property:CustomConditionBuildType=AOTStatic" --runtime linux-musl-x64 --self-contained
+          echo "::endgroup::"
+      - name: Test tools
+        run: |
+          echo "::group::./DOOMExtract -help"
+          "./Build/Linux/DOOMExtract" -help
+          echo "::endgroup::"
+
+          echo "::group::./DOOMModLoader -help"
+          "./Build/Linux/DOOMModLoader" -help
+          echo "::endgroup::"
+
+#         echo "::group::./idCrypt -help"
+#         "./Build/Linux/idCrypt/idCrypt" -help
+#         echo "::endgroup::"
+
+      #Upload
+      - name: Display files
+        run: |
+          echo "::group::File sizes"
+          find "./Build/" -type f -printf "%8s %p\n"
+          echo
+          echo "- Without file sizes:"
+          echo "::endgroup::"
+
+          find "./Build/" -type f | sort
+      - name: Upload tools (Linux)
+        uses: actions/upload-artifact@v4
+        with:
+          compression-level: 9
+          name: "Tools (Linux)"
+          path: "./Build/Linux/"
+      - name: Upload tools (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          compression-level: 9
+          name: "Tools (Windows)"
+          path: "./Build/Windows/"
+
+  build-windows:
+    name: Build (Windows)
+    needs: build #We need the Linux job's idCrypt
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      #Setup
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with: {dotnet-version: 8.0}
+      - name: Display .NET info
+        run: dotnet --info
+
+      #Build
+      - name: Build native Windows .NET tools
+        run: |
+          echo "::group::Windows - DOOMExtract (Native)"
+          dotnet publish "./DOOMExtract/DOOMExtract.csproj" --output "./Build/Windows/" "--property:CustomConditionBuildType=AOT" --runtime win-x64 --self-contained
+          echo "::endgroup::"
+
+          echo "::group::Windows - DOOMModLoader (Native)"
+          dotnet publish "./DOOMModLoader/DOOMModLoader.csproj" --output "./Build/Windows/" "--property:CustomConditionBuildType=AOT" --runtime win-x64 --self-contained
+          echo "::endgroup::"
+
+      #Upload
+      - name: Download idCrypt artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: "Tools (Windows)"
+          path: "./Build/Download/"
+      - name: Test tools
+        run: |
+          echo "::group::./DOOMExtract.exe -help"
+          Start-Process "./Build/Windows/DOOMExtract.exe" "-help" -NoNewWindow -Wait
+          echo "::endgroup::"
+
+          echo "::group::./DOOMModLoader.exe -help"
+          Start-Process "./Build/Windows/DOOMModLoader.exe" "-help" -NoNewWindow -Wait
+          echo "::endgroup::"
+
+          echo "::group::./idCrypt.exe -help"
+          Move-Item "./Build/Download/idCrypt.exe" "./Build/Windows/idCrypt.exe"
+          Start-Process "./Build/Windows/idCrypt.exe" "-help" -NoNewWindow -Wait
+          echo "::endgroup::"
+      - name: Display files
+        run: Get-ChildItem "./Build/" -Recurse -Name -File
+      - name: Upload tools (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          compression-level: 9
+          name: "Tools (Windows)"
+          overwrite: true
+          path: "./Build/Windows/"
