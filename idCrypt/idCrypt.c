@@ -122,7 +122,7 @@ void PrintUsage(void)
 
 int main(int argc, char *argv[])
 {
-	printf("idCrypt originally by emoose, v0.2+ by Zwip-Zwap Zapony\n"
+	printf("idCrypt originally by emoose, v0.3 by Zwip-Zwap Zapony\n"
 		"https://github.com/ZwipZwapZapony/DOOMModLoader\n\n");
 
 	signed char decrypt = -1;

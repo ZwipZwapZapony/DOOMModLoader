@@ -36,7 +36,7 @@ partial class Program
 
 	static int Main(string[] args)
 	{
-		Console.WriteLine("DOOMModLoader originally by infogram, v0.2+ by Zwip-Zwap Zapony and PowerBall253");
+		Console.WriteLine("DOOMModLoader originally by infogram, v0.3 by Zwip-Zwap Zapony and PowerBall253");
 		Console.WriteLine("https://github.com/ZwipZwapZapony/DOOMModLoader");
 		Console.WriteLine();
 

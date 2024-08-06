@@ -101,7 +101,7 @@ class Program
 
 	static int Main(string[] args)
 	{
-		Console.WriteLine("DOOMExtract originally by infogram, v0.2+ by Zwip-Zwap Zapony");
+		Console.WriteLine("DOOMExtract originally by infogram, v0.3 by Zwip-Zwap Zapony");
 		Console.WriteLine("https://github.com/ZwipZwapZapony/DOOMModLoader");
 		Console.WriteLine();
 
