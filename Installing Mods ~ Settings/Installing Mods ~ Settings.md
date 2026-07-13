@@ -6,7 +6,6 @@ After running DOOMModLoader once, a "*DOOMModLoaderSettings.txt*" file will be c
 	launchGame = true; //Launch the game after installing mods
 	patchGame = true; //Patch the game to not require developer mode, if possible
 	showConflicts = true; //Show mod file conflicts
-	showModsInConsole = true; //Show the installed mod count in the console's footer
 	showZipWarnings = false; //Show mod development warnings for zips, not just loose files
 	snapMap = false; //Install mods for SnapMap instead of Campaign/Multiplayer
 	uncapCutscenes = false; //Experimental: Let cutscenes run at more than 60 FPS
